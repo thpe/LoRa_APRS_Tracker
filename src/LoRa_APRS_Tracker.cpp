@@ -40,6 +40,10 @@ static void handle_tx_click() {
   send_update = true;
 }
 
+static String aprsPARM = ":         :PARM.Ucell,Icell";
+static String aprsUNIT = ":         :UNIT.Volt,Ampere";
+static String aprsEQNS = ":         :EQNS.0,0.01,0,0,0.001,-0.5";
+
 // cppcheck-suppress unusedFunction
 void setup() {
   Serial.begin(115200);
@@ -84,6 +88,13 @@ void setup() {
   logPrintlnI("Smart Beacon is " + getSmartBeaconState());
   show_display("INFO", "Smart Beacon is " + getSmartBeaconState(), 1000);
   logPrintlnI("setup done...");
+
+  for (int i = 0; i < Config.callsign.length(); i++) {
+    aprsPARM[i+1] = Config.callsign[i];
+    aprsUNIT[i+1] = Config.callsign[i];
+    aprsEQNS[i+1] = Config.callsign[i];
+  }
+
   delay(500);
 }
 
@@ -112,6 +123,8 @@ void loop() {
   static double       currentHeading          = 0;
   static double       previousHeading         = 0;
   static unsigned int rate_limit_message_text = 0;
+  static unsigned int counter = 0;
+  static unsigned int telecounter = 0;
 
   if (gps.time.isValid()) {
     setTime(gps.time.hour(), gps.time.minute(), gps.time.second(), gps.date.day(), gps.date.month(), gps.date.year());
@@ -131,6 +144,9 @@ void loop() {
     }
   }
 
+  if (telecounter > 999) {
+    telecounter = 0;
+  }
   static double   lastTxLat       = 0.0;
   static double   lastTxLng       = 0.0;
   static double   lastTxdistance  = 0.0;
@@ -231,26 +247,48 @@ void loop() {
       speed_zero_sent = 0;
     }
 
+    logPrintlnI("prepare message");
     String aprsmsg;
-    aprsmsg = "!" + lat + Config.beacon.overlay + lng + Config.beacon.symbol + course_and_speed + alt;
-    // message_text every 10's packet (i.e. if we have beacon rate 1min at high
-    // speed -> every 10min). May be enforced above (at expirey of smart beacon
-    // rate (i.e. every 30min), or every third packet on static rate (i.e.
-    // static rate 10 -> every third packet)
-    if (!(rate_limit_message_text++ % 10)) {
-      aprsmsg += Config.beacon.message;
+    int resid = counter % 50;
+    switch (resid) {
+    case 0:
+      aprsmsg = aprsPARM;
+      break;
+    case 1:
+      aprsmsg = aprsUNIT;
+      break;
+    case 2:
+      aprsmsg = aprsEQNS;
+      break;
+    default:
+      if (resid % 2) {
+        aprsmsg = "!" + lat + Config.beacon.overlay + lng + Config.beacon.symbol + course_and_speed + alt;
+        // message_text every 10's packet (i.e. if we have beacon rate 1min at high
+        // speed -> every 10min). May be enforced above (at expirey of smart beacon
+        // rate (i.e. every 30min), or every third packet on static rate (i.e.
+        // static rate 10 -> every third packet)
+        if (resid == 10) {
+          aprsmsg += Config.beacon.message;
+        }
+        if (BatteryIsConnected) {
+          aprsmsg += " -  _Bat.: " + batteryVoltage + "V - Cur.: " + batteryChargeCurrent + "mA";
+        }
+        if (Config.enhance_precision) {
+          aprsmsg += " " + dao;
+        }
+      } else {
+        String counter_str = padding(telecounter++, 3);
+        aprsmsg = "T#" + counter_str + "," +
+                  String(powerManagement.getBatteryVoltage() * 100, 0) + "," +
+                  String(powerManagement.getBatteryChargeDischargeCurrent() + 500, 0);
+      }
     }
-    if (BatteryIsConnected) {
-      aprsmsg += " -  _Bat.: " + batteryVoltage + "V - Cur.: " + batteryChargeCurrent + "mA";
-    }
-
-    if (Config.enhance_precision) {
-      aprsmsg += " " + dao;
-    }
+    counter++;
 
     msg.getAPRSBody()->setData(aprsmsg);
     String data = msg.encode();
     logPrintlnD(data);
+    logPrintlnI("transmit");
     show_display("<< TX >>", data);
 
     if (Config.ptt.active) {
