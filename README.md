@@ -23,9 +23,9 @@ Keep in minde: you need a 433MHz version!
 
 ### How to compile
 
-The best success is to use PlatformIO (and it is the only platform where I can support you). 
+The best success is to use PlatformIO (and it is the only platform where I can support you).
 
-* Go to [PlatformIO](https://platformio.org/) download and install the IDE. 
+* Go to [PlatformIO](https://platformio.org/) download and install the IDE.
 * If installed open the IDE, go to the left side and klick on 'extensions' then search for 'PatformIO' and install.
 * When installed click 'the ant head' on the left and choose import the project on the right.
 * Just open the folder and you can compile the Firmware.
@@ -36,6 +36,14 @@ The best success is to use PlatformIO (and it is the only platform where I can s
 * The `button_tx` setting enables manual triggering of the beacon using the middle button on the T-Beam.
 * To upload it to your board you have to do this via **Upload File System image** in PlatformIO!
 * To find the 'Upload File System image' click the PlatformIO symbol (the little alien) on the left side, choos your configuration, click on 'Platform' and search for 'Upload File System image'.
+
+### Messages
+
+This version is modified to send proper telemetry messages.
+* PARM, for parameter descriptions,
+* UNIT, for units,
+* EQNS, for shifting the values a bit.
+Currently, only voltage and current of the battery cell is implemented.
 
 ## LoRa iGate
 
