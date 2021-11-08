@@ -40,9 +40,9 @@ static void handle_tx_click() {
   send_update = true;
 }
 
-static String aprsPARM = ":         :PARM.Ucell,Icell";
-static String aprsUNIT = ":         :UNIT.Volt,Ampere";
-static String aprsEQNS = ":         :EQNS.0,0.01,0,0,0.001,-0.5";
+static String aprsPARM = ":         :PARM.Ubat,Ibat,temp";
+static String aprsUNIT = ":         :UNIT.Volt,Miliampere,Celsius";
+static String aprsEQNS = ":         :EQNS.0,0.01,0,0,1,-500,0,0.1,-30";
 
 // cppcheck-suppress unusedFunction
 void setup() {
@@ -101,6 +101,7 @@ void setup() {
 // cppcheck-suppress unusedFunction
 void loop() {
   userButton.tick();
+  delay(500);
 
   if (Config.debug) {
     while (Serial.available() > 0) {
@@ -150,7 +151,7 @@ void loop() {
   static double   lastTxLat       = 0.0;
   static double   lastTxLng       = 0.0;
   static double   lastTxdistance  = 0.0;
-  static uint32_t txInterval      = 60000L; // Initial 60 secs internal
+  static uint32_t txInterval      = 30000L; // Initial 60 secs internal
   static uint32_t lastTxTime      = millis();
   static int      speed_zero_sent = 0;
 
@@ -270,9 +271,6 @@ void loop() {
         if (resid == 10) {
           aprsmsg += Config.beacon.message;
         }
-        if (BatteryIsConnected) {
-          aprsmsg += " -  _Bat.: " + batteryVoltage + "V - Cur.: " + batteryChargeCurrent + "mA";
-        }
         if (Config.enhance_precision) {
           aprsmsg += " " + dao;
         }
@@ -280,7 +278,8 @@ void loop() {
         String counter_str = padding(telecounter++, 3);
         aprsmsg = "T#" + counter_str + "," +
                   String(powerManagement.getBatteryVoltage() * 100, 0) + "," +
-                  String(powerManagement.getBatteryChargeDischargeCurrent() + 500, 0);
+                  String(powerManagement.getBatteryChargeDischargeCurrent() + 500, 0) + "," +
+                  String(int(powerManagement.getTemp() + 300));
       }
     }
     counter++;
