@@ -67,6 +67,11 @@ double PowerManagement::getBatteryChargeDischargeCurrent() {
   return -1.0 * axp.getBattDischargeCurrent();
 }
 
+// cppcheck-suppress unusedFunction
+double PowerManagement::getTemp() {
+  return axp.getTemp();
+}
+
 bool PowerManagement::isBatteryConnect() {
   return axp.isBatteryConnect();
 }
