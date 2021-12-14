@@ -7,10 +7,12 @@
 #include <WiFi.h>
 #include <logger.h>
 
+#include <HardwareSerial.h>
 #include "configuration.h"
 #include "display.h"
 #include "pins.h"
 #include "power_management.h"
+#include "soc/rtc.h"
 
 Configuration Config;
 
@@ -19,6 +21,7 @@ OneButton       userButton = OneButton(BUTTON_PIN, true, true);
 
 HardwareSerial ss(1);
 TinyGPSPlus    gps;
+TinyGPSPlus    gpsbuf;
 
 void load_config();
 void setup_lora();
@@ -44,9 +47,14 @@ static String aprsPARM = ":         :PARM.Ubat,Ibat,temp";
 static String aprsUNIT = ":         :UNIT.Volt,Miliampere,Celsius";
 static String aprsEQNS = ":         :EQNS.0,0.01,0,0,1,-500,0,0.1,-30";
 
+static uint8_t maxperf[] = {0xB5, 0x62, 0x06, 0x11, 0x02, 0x00, 0x08, 0x00, 0x21, 0x91};
+static uint8_t pwrsave[] = {0xB5, 0x62, 0x06, 0x11, 0x02, 0x00, 0x08, 0x01, 0x22, 0x92};
+
+
 // cppcheck-suppress unusedFunction
 void setup() {
   Serial.begin(115200);
+  ss.write(maxperf, 10);
 
 #ifdef TTGO_T_Beam_V1_0
   Wire.begin(SDA, SCL);
@@ -98,28 +106,38 @@ void setup() {
   delay(500);
 }
 
+volatile static bool new_gps_data = false;
+
+void serialEventRun(void) {
+  while (ss.available() > 0) {
+    char c = ss.read();
+    gpsbuf.encode(c);
+  }
+  // only copy if the old one was taken
+  if (not new_gps_data and (gpsbuf.time.isValid() or gpsbuf.time.isUpdated() or gpsbuf.location.isUpdated())) {
+    gps = gpsbuf;
+    new_gps_data = true;
+  }
+}
+
+
+
 // cppcheck-suppress unusedFunction
 void loop() {
   userButton.tick();
   delay(500);
 
-  if (Config.debug) {
-    while (Serial.available() > 0) {
-      char c = Serial.read();
-      // Serial.print(c);
-      gps.encode(c);
-    }
+  logPrintlnE("temp "+ String(powerManagement.getTemp()));
+  TinyGPSPlus    gpsloc;
+  if(new_gps_data) {
+    gpsloc = gps;
+    new_gps_data = false;
   } else {
-    while (ss.available() > 0) {
-      char c = ss.read();
-      // Serial.print(c);
-      gps.encode(c);
-    }
   }
-
-  bool          gps_time_update     = gps.time.isUpdated();
-  bool          gps_loc_update      = gps.location.isUpdated();
+  bool          gps_time_update     = gpsloc.time.isUpdated();
+  bool          gps_loc_update      = gpsloc.location.isUpdated();
   static time_t nextBeaconTimeStamp = -1;
+  static time_t nextTelemetryTimeStamp = -1;
 
   static double       currentHeading          = 0;
   static double       previousHeading         = 0;
@@ -127,13 +145,13 @@ void loop() {
   static unsigned int counter = 0;
   static unsigned int telecounter = 0;
 
-  if (gps.time.isValid()) {
-    setTime(gps.time.hour(), gps.time.minute(), gps.time.second(), gps.date.day(), gps.date.month(), gps.date.year());
+  if (gpsloc.time.isValid()) {
+    setTime(gpsloc.time.hour(), gpsloc.time.minute(), gpsloc.time.second(), gpsloc.date.day(), gpsloc.date.month(), gpsloc.date.year());
 
     if (gps_loc_update && nextBeaconTimeStamp <= now()) {
       send_update = true;
       if (Config.smart_beacon.active) {
-        currentHeading = gps.course.deg();
+        currentHeading = gpsloc.course.deg();
         // enforce message text on slowest Config.smart_beacon.slow_rate
         rate_limit_message_text = 0;
       } else {
@@ -170,8 +188,8 @@ void loop() {
 
   if (!send_update && gps_loc_update && Config.smart_beacon.active) {
     uint32_t lastTx = millis() - lastTxTime;
-    currentHeading  = gps.course.deg();
-    lastTxdistance  = TinyGPSPlus::distanceBetween(gps.location.lat(), gps.location.lng(), lastTxLat, lastTxLng);
+    currentHeading  = gpsloc.course.deg();
+    lastTxdistance  = TinyGPSPlus::distanceBetween(gpsloc.location.lat(), gpsloc.location.lng(), lastTxLat, lastTxLng);
     if (lastTx >= txInterval) {
       // Trigger Tx Tracker when Tx interval is reach
       // Will not Tx if stationary bcos speed < 5 and lastTxDistance < 20
@@ -206,16 +224,16 @@ void loop() {
     msg.setDestination("APLT00-1");
 
     if (!Config.enhance_precision) {
-      lat = create_lat_aprs(gps.location.rawLat());
-      lng = create_long_aprs(gps.location.rawLng());
+      lat = create_lat_aprs(gpsloc.location.rawLat());
+      lng = create_long_aprs(gpsloc.location.rawLng());
     } else {
-      lat = create_lat_aprs_dao(gps.location.rawLat());
-      lng = create_long_aprs_dao(gps.location.rawLng());
-      dao = create_dao_aprs(gps.location.rawLat(), gps.location.rawLng());
+      lat = create_lat_aprs_dao(gpsloc.location.rawLat());
+      lng = create_long_aprs_dao(gpsloc.location.rawLng());
+      dao = create_dao_aprs(gpsloc.location.rawLat(), gpsloc.location.rawLng());
     }
 
     String alt     = "";
-    int    alt_int = max(-99999, min(999999, (int)gps.altitude.feet()));
+    int    alt_int = max(-99999, min(999999, (int)gpsloc.altitude.feet()));
     if (alt_int < 0) {
       alt = "/A=-" + padding(alt_int * -1, 5);
     } else {
@@ -223,10 +241,10 @@ void loop() {
     }
 
     String course_and_speed = "";
-    int    speed_int        = max(0, min(999, (int)gps.speed.knots()));
+    int    speed_int        = max(0, min(999, (int)gpsloc.speed.knots()));
     if (speed_zero_sent < 3) {
       String speed      = padding(speed_int, 3);
-      int    course_int = max(0, min(360, (int)gps.course.deg()));
+      int    course_int = max(0, min(360, (int)gpsloc.course.deg()));
       /* course in between 1..360 due to aprs spec */
       if (course_int == 0) {
         course_int = 360;
@@ -240,7 +258,7 @@ void loop() {
          After that, we save airtime by not sending speed/course 000/000.
          Btw, even if speed we really do not move, measured course is changeing
          (-> no useful / even wrong info)
-      */
+       */
       if (speed_zero_sent < 3) {
         speed_zero_sent += 1;
       }
@@ -250,37 +268,77 @@ void loop() {
 
     logPrintlnI("prepare message");
     String aprsmsg;
+    aprsmsg = "!" + lat + Config.beacon.overlay + lng + Config.beacon.symbol + course_and_speed + alt;
+    // message_text every 10's packet (i.e. if we have beacon rate 1min at high
+    // speed -> every 10min). May be enforced above (at expirey of smart beacon
+    // rate (i.e. every 30min), or every third packet on static rate (i.e.
+    // static rate 10 -> every third packet)
+    aprsmsg += Config.beacon.message;
+    if (Config.enhance_precision) {
+      aprsmsg += " " + dao;
+    }
+    msg.getAPRSBody()->setData(aprsmsg);
+    String data = msg.encode();
+    logPrintlnD(data);
+    logPrintlnI("transmit");
+    show_display("<< TX >>", data);
+
+    if (Config.ptt.active) {
+      digitalWrite(Config.ptt.io_pin, Config.ptt.reverse ? LOW : HIGH);
+      delay(Config.ptt.start_delay);
+    }
+
+    LoRa.beginPacket();
+    // Header:
+    LoRa.write('<');
+    LoRa.write(0xFF);
+    LoRa.write(0x01);
+    // APRS Data:
+    LoRa.write((const uint8_t *)data.c_str(), data.length());
+    LoRa.endPacket();
+
+    if (Config.smart_beacon.active) {
+      lastTxLat       = gpsloc.location.lat();
+      lastTxLng       = gpsloc.location.lng();
+      previousHeading = currentHeading;
+      lastTxdistance  = 0.0;
+      lastTxTime      = millis();
+    }
+
+    if (Config.ptt.active) {
+      delay(Config.ptt.end_delay);
+      digitalWrite(Config.ptt.io_pin, Config.ptt.reverse ? HIGH : LOW);
+    }
+  } if (nextTelemetryTimeStamp <= now()) {
+    nextTelemetryTimeStamp = now() + 60;
+    APRSMessage msg;
+    msg.setSource(Config.callsign);
+    msg.setDestination("APLT00-1");
+
+    logPrintlnI("prepare message");
+    String aprsmsg;
     int resid = counter % 50;
     switch (resid) {
-    case 0:
-      aprsmsg = aprsPARM;
-      break;
-    case 1:
-      aprsmsg = aprsUNIT;
-      break;
-    case 2:
-      aprsmsg = aprsEQNS;
+      case 0:
+        aprsmsg = aprsPARM;
+        // test NEO6 power save
+        // ss.write(pwrsave, 10);
+        break;
+      case 1:
+        aprsmsg = aprsUNIT;
+        break;
+      case 2:
+        aprsmsg = aprsEQNS;
+//        test ESP32 sleep
+//        esp_sleep_enable_timer_wakeup(1000000);
+//        esp_light_sleep_start();
       break;
     default:
-      if (resid % 2) {
-        aprsmsg = "!" + lat + Config.beacon.overlay + lng + Config.beacon.symbol + course_and_speed + alt;
-        // message_text every 10's packet (i.e. if we have beacon rate 1min at high
-        // speed -> every 10min). May be enforced above (at expirey of smart beacon
-        // rate (i.e. every 30min), or every third packet on static rate (i.e.
-        // static rate 10 -> every third packet)
-        if (resid == 10) {
-          aprsmsg += Config.beacon.message;
-        }
-        if (Config.enhance_precision) {
-          aprsmsg += " " + dao;
-        }
-      } else {
-        String counter_str = padding(telecounter++, 3);
-        aprsmsg = "T#" + counter_str + "," +
-                  String(powerManagement.getBatteryVoltage() * 100, 0) + "," +
-                  String(powerManagement.getBatteryChargeDischargeCurrent() + 500, 0) + "," +
-                  String(int(powerManagement.getTemp() + 300));
-      }
+      String counter_str = padding(telecounter++, 3);
+      aprsmsg = "T#" + counter_str + "," +
+                String(powerManagement.getBatteryVoltage() * 100, 0) + "," +
+                String(powerManagement.getBatteryChargeDischargeCurrent() + 500, 0) + "," +
+                String(int(powerManagement.getTemp() + 300));
     }
     counter++;
 
@@ -304,26 +362,17 @@ void loop() {
     LoRa.write((const uint8_t *)data.c_str(), data.length());
     LoRa.endPacket();
 
-    if (Config.smart_beacon.active) {
-      lastTxLat       = gps.location.lat();
-      lastTxLng       = gps.location.lng();
-      previousHeading = currentHeading;
-      lastTxdistance  = 0.0;
-      lastTxTime      = millis();
-    }
-
     if (Config.ptt.active) {
       delay(Config.ptt.end_delay);
       digitalWrite(Config.ptt.io_pin, Config.ptt.reverse ? HIGH : LOW);
     }
   }
-
   if (gps_time_update) {
-    show_display(Config.callsign, createDateString(now()) + " " + createTimeString(now()), String("Sats: ") + gps.satellites.value() + " HDOP: " + gps.hdop.hdop(), String("Nxt Bcn: ") + (Config.smart_beacon.active ? "~" : "") + createTimeString(nextBeaconTimeStamp), BatteryIsConnected ? (String("Bat: ") + batteryVoltage + "V, " + batteryChargeCurrent + "mA") : "Powered via USB", String("Smart Beacon: " + getSmartBeaconState()));
+    show_display(Config.callsign, createDateString(now()) + " " + createTimeString(now()), String("Sats: ") + gpsloc.satellites.value() + " HDOP: " + gpsloc.hdop.hdop(), String("Nxt Bcn: ") + (Config.smart_beacon.active ? "~" : "") + createTimeString(nextBeaconTimeStamp), BatteryIsConnected ? (String("Bat: ") + batteryVoltage + "V, " + batteryChargeCurrent + "mA") : "Powered via USB", String("Smart Beacon: " + getSmartBeaconState()));
 
     if (Config.smart_beacon.active) {
       // Change the Tx internal based on the current speed
-      int curr_speed = (int)gps.speed.kmph();
+      int curr_speed = (int)gpsloc.speed.kmph();
       if (curr_speed < Config.smart_beacon.slow_speed) {
         txInterval = Config.smart_beacon.slow_rate * 1000;
       } else if (curr_speed > Config.smart_beacon.fast_speed) {
@@ -344,7 +393,7 @@ void loop() {
     }
   }
 
-  if ((Config.debug == false) && (millis() > 5000 && gps.charsProcessed() < 10)) {
+  if ((Config.debug == false) && (millis() > 5000 && gpsloc.charsProcessed() < 10)) {
     logPrintlnE("No GPS frames detected! Try to reset the GPS Chip with this "
                 "firmware: https://github.com/lora-aprs/TTGO-T-Beam_GPS-reset");
   }
@@ -386,6 +435,9 @@ void setup_lora() {
   LoRa.setTxPower(Config.lora.power);
   logPrintlnI("LoRa init done!");
   show_display("INFO", "LoRa init done!", 2000);
+  logPrintlnI("set cpu to 80 MHz");
+  rtc_clk_cpu_freq_set(RTC_CPU_FREQ_80M);
+  logPrintlnI("done");
 }
 
 void setup_gps() {

@@ -47,11 +47,13 @@ void PowerManagement::decativateOLED() {
 // cppcheck-suppress unusedFunction
 void PowerManagement::activateMeasurement() {
   axp.adc1Enable(AXP202_BATT_CUR_ADC1 | AXP202_BATT_VOL_ADC1, true);
+  axp.adc2Enable(AXP202_TEMP_MONITORING_ADC2, true);
 }
 
 // cppcheck-suppress unusedFunction
 void PowerManagement::deactivateMeasurement() {
   axp.adc1Enable(AXP202_BATT_CUR_ADC1 | AXP202_BATT_VOL_ADC1, false);
+  axp.adc2Enable(AXP202_TEMP_MONITORING_ADC2, false);
 }
 
 // cppcheck-suppress unusedFunction
